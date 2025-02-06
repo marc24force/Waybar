@@ -6,14 +6,13 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <shared_mutex>
+#include <thread>
 #include <vector>
 
 #include "modules/hyprland/backend.hpp"
 #include "util/rewrite_string.hpp"
 #include "util/sanitize_str.hpp"
-
-#include <shared_mutex>
-#include <thread>
 
 namespace waybar::modules::hyprland {
 
@@ -21,7 +20,6 @@ std::shared_mutex windowIpcSmtx;
 
 Window::Window(const std::string& id, const Bar& bar, const Json::Value& config)
     : AAppIconLabel(config, "window", id, "{title}", 0, true), bar_(bar) {
-
   std::unique_lock<std::shared_mutex> windowIpcUniqueLock(windowIpcSmtx);
 
   modulesReady = true;
@@ -51,7 +49,6 @@ Window::~Window() {
 }
 
 auto Window::update() -> void {
-
   std::shared_lock<std::shared_mutex> windowIpcShareLock(windowIpcSmtx);
 
   std::string windowName = waybar::util::sanitize_string(workspace_.last_window_title);
@@ -59,16 +56,33 @@ auto Window::update() -> void {
 
   windowData_.title = windowName;
 
+  std::string label_text;
   if (!format_.empty()) {
     label_.show();
-    label_.set_markup(waybar::util::rewriteString(
+    label_text = waybar::util::rewriteString(
         fmt::format(fmt::runtime(format_), fmt::arg("title", windowName),
                     fmt::arg("initialTitle", windowData_.initial_title),
                     fmt::arg("class", windowData_.class_name),
                     fmt::arg("initialClass", windowData_.initial_class_name)),
-        config_["rewrite"]));
+        config_["rewrite"]);
+    label_.set_markup(label_text);
   } else {
     label_.hide();
+  }
+
+  if (tooltipEnabled()) {
+    std::string tooltip_format;
+    if (config_["tooltip-format"].isString()) {
+      tooltip_format = config_["tooltip-format"].asString();
+    }
+    if (!tooltip_format.empty()) {
+      label_.set_tooltip_text(fmt::format(fmt::runtime(tooltip_format), fmt::arg("title", windowName),
+                    fmt::arg("initialTitle", windowData_.initial_title),
+                    fmt::arg("class", windowData_.class_name),
+                    fmt::arg("initialClass", windowData_.initial_class_name)));
+    } else if (!label_text.empty()){
+      label_.set_tooltip_text(label_text);
+    }
   }
 
   if (focused_) {
@@ -153,7 +167,6 @@ auto Window::WindowData::parse(const Json::Value& value) -> Window::WindowData {
 }
 
 void Window::queryActiveWorkspace() {
-
   std::shared_lock<std::shared_mutex> windowIpcShareLock(windowIpcSmtx);
 
   if (separateOutputs_) {
